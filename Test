@@ -1,0 +1,109 @@
+import csv
+
+input_file = "your_input_file.csv"
+output_file = "your_output_file.csv"
+
+columns_order = [
+    "Owner", "Nickname", "Environment", "Internal/External", "Valid To", "Signing Type", "Type",
+    "Server name", "Domain", "Stage", "MC Prod ID", "WO number", "CRQ number",
+    "Comments", "Serial number", "New Serial number", "CURRENT STATUS",
+    "Folder", "Common Name", "Key Size", "Issuer", "Program Name", "Contact",
+    "Installations", "Installation Type", "Device"
+]
+
+signing_keywords = ["MC CA Signing", "Pre Approved", "Public CA Signing", "Third Party Handling", "External"]
+type_keywords = ["JKS", "APACHE", "F5", "PEM", "PKCS", "BASIC", "ADAPTABLE", "DESKTOP"]
+
+with open(input_file, mode='r', encoding='utf-8') as infile:
+    reader = csv.DictReader(infile)
+    data = []
+
+    for row in reader:
+        new_row = {}
+
+        new_row["Owner"] = row.get("Owner", "").strip() or "Unassigned"
+        new_row["Nickname"] = row.get("Nickname", "").strip()
+        new_row["Environment"] = row.get("01 Environment", "").strip()
+        folder_value = row.get("Folder", "").lower()
+        new_row["Internal/External"] = "External" if "external" in folder_value else "Internal"
+        new_row["Valid To"] = row.get("Valid To", "").strip()
+        new_row["Signing Type"] = "OTHER"
+        
+        for keyword in signing_keywords:
+            if keyword.lower() in folder_value:
+                new_row["Signing Type"] = keyword
+                break
+
+        install_type = row.get("Installation Type", "").upper()
+        new_row["Type"] = "OTHER"
+        
+        for keyword in type_keywords:
+            if keyword in install_type:
+                new_row["Type"] = keyword
+                break
+
+        if new_row["Type"] == "OTHER" and "-" in install_type:
+            new_row["Type"] = install_type.split("-")[0]
+
+        device_value = row.get("Device", "").strip()
+        new_row["Server name"] = device_value.split("(")[0].strip()
+        common_name = row.get("Common Name", "").lower()
+        new_row["Domain"] = "MC Domain" if "mastercard" in common_name else "NON MC Domain"
+        status_value = row.get("Status", "").strip().lower()
+
+        if status_value == "completed":
+            new_row["Stage"] = "Cert Secured"
+        elif status_value == "none":
+            new_row["Stage"] = "Phased Out"
+        else:
+            new_row["Stage"] = ""
+
+        comments = row.get("Comments", "")
+        new_row["MC Prod ID"] = ""
+
+        if "mcprod" in comments.lower():
+            for word in comments.split():
+                if word.lower().startswith("mcprod") and len(word) >= 7:
+                    new_row["MC Prod ID"] = word
+                    break
+
+        new_row["WO number"] = ""
+        if "WO" in comments:
+            for word in comments.split():
+                if word.startswith("WO") and len(word) == 15:
+                    new_row["WO number"] = word
+                    break
+
+        new_row["CRQ number"] = ""
+        if "CRQ" in comments:
+            for word in comments.split():
+                if word.startswith("CRQ") and len(word) == 15:
+                    new_row["CRQ number"] = word
+                    break
+
+        new_row["Comments"] = comments.strip()
+        new_row["Serial number"] = row.get("Serial Number", "").strip()
+        new_row["New Serial number"] = ""
+        new_row["CURRENT STATUS"] = "Expiring"
+
+        if status_value == "completed":
+            new_row["CURRENT STATUS"] = "Renewed"
+        elif status_value == "none":
+            new_row["CURRENT STATUS"] = "Retired"
+
+        for col in ["Folder", "Common Name", "Key Size", "Issuer", "Program Name", "Contact",
+                    "Installations", "Installation Type", "Device"]:
+            new_row[col] = row.get(col, "").strip()
+
+        if new_row["Type"] == "F5" and new_row["Domain"] == "MC Domain":
+            new_row["Stage"] = "AUTOMATION"
+            new_row["CURRENT STATUS"] = "AUTOMATED"
+
+        data.append(new_row)
+
+with open(output_file, mode='w', encoding='utf-8', newline='') as outfile:
+    writer = csv.DictWriter(outfile, fieldnames=columns_order)
+    writer.writeheader()
+    writer.writerows(data)
+
+print("CSV processing complete. File saved as:", output_file)
