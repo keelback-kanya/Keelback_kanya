@@ -1,89 +1,96 @@
 import os
 import pandas as pd
+import shutil
 
-# Define constants
-BASE_FOLDER_PATH = r"C:\Users\e150819\OneDrive - Mastercard\Documents\Test Automation\CERA_ALERTS"
-TEMPLATE_FOLDER = os.path.join(BASE_FOLDER_PATH, "ACC_TEMPLATE")
+# Hardcoded base folder path
+BASE_PATH = r"C:\Users\e150819\OneDrive - Mastercard\Documents\Test Automation\CERA_ALERTS"
 
-def load_workbook():
-    """Loads the workbook and reads Alert HQ & Alert Blueprint sheets."""
-    excel_files = [f for f in os.listdir(TEMPLATE_FOLDER) if f.endswith(".xlsx")]
-    if not excel_files:
-        raise FileNotFoundError("No Excel template found in ACC_TEMPLATE.")
-    
-    workbook_path = os.path.join(TEMPLATE_FOLDER, excel_files[0])
-    workbook = pd.ExcelFile(workbook_path)
+def load_excel(file_path):
+    """ Load the Excel file and return relevant sheets """
+    xls = pd.ExcelFile(file_path)
+    alert_hq = pd.read_excel(xls, "Alert HQ", header=None)
+    alert_blueprint = pd.read_excel(xls, "Alert Blueprint", header=None)
+    return alert_hq, alert_blueprint
 
-    alert_hq = pd.read_excel(workbook, sheet_name="Alert HQ", dtype=str).fillna("")
-    alert_blueprint = pd.read_excel(workbook, sheet_name="Alert Blueprint", dtype=str).fillna("")
-
-    return workbook_path, alert_hq, alert_blueprint
-
-def get_base_id(alert_hq):
-    """Finds the ID dynamically from Alert HQ (Column A contains 'ID')."""
-    id_row = alert_hq[alert_hq.iloc[:, 0].str.contains("ID", na=False, case=False)].index
-    if not id_row.empty:
-        return str(alert_hq.iloc[id_row[0], 1]).strip()
-    raise ValueError("ID not found in Alert HQ")
-
-def setup_feature_folder(feature_id, workbook_path):
-    """Creates a folder named after the Feature ID & copies the template Excel inside it."""
-    feature_folder = os.path.join(BASE_FOLDER_PATH, feature_id)
+def create_feature_folder(alert_hq):
+    """ Create a feature folder based on B1 in Alert HQ """
+    feature_name = str(alert_hq.iloc[0, 1]).strip()  # B1
+    feature_folder = os.path.join(BASE_PATH, feature_name)
     os.makedirs(feature_folder, exist_ok=True)
+    return feature_folder, feature_name
 
-    # Copy Excel file into feature folder
-    feature_excel_path = os.path.join(feature_folder, f"{feature_id}_ACC.xlsx")
-    if not os.path.exists(feature_excel_path):
-        pd.ExcelWriter(feature_excel_path).close()  # Create an empty file first
-        os.system(f'copy "{workbook_path}" "{feature_excel_path}"')
-
-    return feature_folder, feature_excel_path
+def copy_template_excel(feature_folder, feature_name):
+    """ Copy and rename the template Excel file inside the feature folder """
+    template_path = os.path.join(BASE_PATH, "ACC_TEMPLATE", "ACC_Template.xlsx")
+    new_excel_path = os.path.join(feature_folder, f"{feature_name}_ACC.xlsx")
+    shutil.copy(template_path, new_excel_path)
+    return new_excel_path
 
 def create_env_folders(feature_folder, alert_hq):
-    """Creates environment folders based on B3 (comma-separated values) in Alert HQ."""
-    envs = alert_hq.iloc[2, 1].split(",")  # B3 (assuming it's in row index 2)
+    """ Create folders based on B3 (comma-separated environments) in Alert HQ """
+    env_list = str(alert_hq.iloc[2, 1]).strip().split(",")  # B3
     env_folders = {}
-
-    for env in map(str.strip, envs):
-        env_folder = os.path.join(feature_folder, env)
-        os.makedirs(env_folder, exist_ok=True)
-        env_folders[env] = env_folder
-
+    for env in env_list:
+        env = env.strip()
+        env_path = os.path.join(feature_folder, env)
+        os.makedirs(env_path, exist_ok=True)
+        env_folders[env] = env_path
     return env_folders
 
-def generate_spl_files(env_folders, alert_hq, alert_blueprint, base_id):
-    """Creates SPL files in respective environment folders based on Alert Blueprint."""
-    app_name = alert_hq.iloc[1, 1].strip()  # B2
-    severity_column = alert_blueprint.iloc[:, 1]  # Column B (Severity)
-    title_column = alert_blueprint.iloc[:, 0]  # Column A (Title)
-    query_column = alert_blueprint.iloc[:, 2]  # Column C (Query)
+def generate_spl_files(env_folders, alert_hq, alert_blueprint):
+    """ Generate SPL files using data from Alert HQ and Alert Blueprint """
 
-    current_id = int(base_id)
+    # Extract base ID from B7 (Ensure it's clean and numeric)
+    try:
+        base_id = int(str(alert_hq.iloc[6, 1]).strip())  # B7
+    except ValueError:
+        print("ERROR: Invalid ID in B7. Check Alert HQ.")
+        return
+    
+    app_name = str(alert_hq.iloc[1, 1]).strip()  # B2 (App Name)
 
-    for index, title in enumerate(title_column[1:], start=1):  # Skip headers
-        severity = severity_column[index].strip()
-        query_template = query_column[index]
+    # Iterate over rows in Alert Blueprint (skip header row)
+    for index, row in alert_blueprint.iloc[1:].iterrows():
+        title = str(row[0]).strip()  # A column (Title)
+        severity = str(row[1]).strip()  # B column (Severity)
+        query_content = str(row[2]).strip()  # C column (Query Content)
 
-        for env, env_folder in env_folders.items():
-            spl_filename = f"CERA-{app_name}-{str(current_id).zfill(5)}-{severity}-{env}-{app_name}-{title.replace(' ', '')}.spl"
-            spl_path = os.path.join(env_folder, spl_filename)
+        # Generate SPL file for each ENV
+        for env in env_folders:
+            current_id = f"{base_id:05}"  # Ensure 5-digit ID
+            base_id += 1  # Increment ID for next file
 
-            # Update query with correct cf_space_name
-            query_content = query_template.replace('cf_space_name=""', f'cf_space_name="{env}"')
+            # Format filename
+            formatted_title = "".join(word.capitalize() for word in title.split())  # Convert to TitleCase
+            spl_filename = f"CERA-{app_name}-{current_id}-{severity}-{env}-{app_name}-{formatted_title}.spl"
+            spl_path = os.path.join(env_folders[env], spl_filename)
 
-            with open(spl_path, "w", encoding="utf-8") as file:
-                file.write(query_content)
+            # Modify cf_space_name in query content
+            query_with_env = query_content.replace('cf_space_name=""', f'cf_space_name="{env}"')
 
-            current_id += 1  # Increment ID for next file
+            # Write SPL file
+            with open(spl_path, "w") as file:
+                file.write(query_with_env)
+    
+    print("✅ SPL files successfully created in respective ENV folders.")
 
 def main():
-    workbook_path, alert_hq, alert_blueprint = load_workbook()
-    base_id = get_base_id(alert_hq)
-    feature_folder, feature_excel_path = setup_feature_folder(base_id, workbook_path)
+    excel_file = r"C:\Users\e150819\OneDrive - Mastercard\Documents\Test Automation\ACC_Template\ACC_Template.xlsx"
+    
+    # Load data
+    alert_hq, alert_blueprint = load_excel(excel_file)
+    
+    # Step 1: Create feature folder using B1
+    feature_folder, feature_name = create_feature_folder(alert_hq)
+    
+    # Step 2: Copy and rename the Excel file
+    new_excel_path = copy_template_excel(feature_folder, feature_name)
+    
+    # Step 3: Create environment folders
     env_folders = create_env_folders(feature_folder, alert_hq)
-    generate_spl_files(env_folders, alert_hq, alert_blueprint, base_id)
-
-    print(f"✅ SPL files successfully generated in {feature_folder}")
+    
+    # Step 4: Generate SPL files
+    generate_spl_files(env_folders, alert_hq, alert_blueprint)
 
 if __name__ == "__main__":
     main()
