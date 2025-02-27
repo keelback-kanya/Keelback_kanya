@@ -2,83 +2,81 @@ import os
 import shutil
 import pandas as pd
 
-# Hardcoded paths (You will update these as needed)
-BASE_FOLDER_PATH = "C:/Your/Path/CERA_AUTO_ALERTS"
-EXCEL_PATH = os.path.join(BASE_FOLDER_PATH, "ACC_Template", "ACC_Template.xlsx")
+def load_excel(file_path):
+    """Loads the Alert HQ and Alert Blueprint sheets from the Excel file."""
+    xls = pd.ExcelFile(file_path)
+    alert_hq = pd.read_excel(xls, sheet_name="Alert HQ", header=None)
+    alert_blueprint = pd.read_excel(xls, sheet_name="Alert Blueprint")
+    return alert_hq, alert_blueprint
 
-def load_excel():
-    """Load 'Alert HQ' and 'Alert Blueprint' from ACC_Template.xlsx"""
-    if not os.path.exists(EXCEL_PATH):
-        raise FileNotFoundError(f"Excel file not found at: {EXCEL_PATH}")
+def create_feature_folder(base_path, feature_name):
+    """Creates the feature folder inside CERA_AUTO_ALERTS."""
+    feature_path = os.path.join(base_path, "CERA_AUTO_ALERTS", feature_name)
+    os.makedirs(feature_path, exist_ok=True)
+    return feature_path
 
-    xls = pd.ExcelFile(EXCEL_PATH)
-    return xls.parse("Alert HQ"), xls.parse("Alert Blueprint")
-
-def create_feature_folder(alert_hq):
-    """Create folder using B1 (Feature Number) from Alert HQ"""
-    feature_number = str(alert_hq.iloc[0, 1]).strip()  # B1 in Alert HQ
-    
-    if not feature_number:
-        raise ValueError("Feature Number (B1) is missing in Alert HQ")
-
-    feature_folder = os.path.join(BASE_FOLDER_PATH, feature_number)
-    os.makedirs(feature_folder, exist_ok=True)
-
-    # Copy Excel file into this folder using shutil
-    excel_copy_path = os.path.join(feature_folder, f"{feature_number}_ACC.xlsx")
-    
-    if os.path.exists(EXCEL_PATH):
-        shutil.copy(EXCEL_PATH, excel_copy_path)
-    else:
-        raise FileNotFoundError(f"Template file not found at: {EXCEL_PATH}")
-
-    return feature_folder, feature_number
-
-def create_env_folders(feature_folder, alert_hq):
-    """Create environment-wise folders inside the feature folder"""
-    env_list = str(alert_hq.iloc[2, 1]).strip().split(",")  # B3 in Alert HQ
-    
+def create_env_folders(feature_path, env_list):
+    """Creates environment-specific folders inside the feature folder."""
     env_folders = {}
     for env in env_list:
-        env_name = env.strip()
-        if env_name:
-            env_folder = os.path.join(feature_folder, env_name)
-            os.makedirs(env_folder, exist_ok=True)
-            env_folders[env_name] = env_folder
-    
+        env_path = os.path.join(feature_path, env.strip())
+        os.makedirs(env_path, exist_ok=True)
+        env_folders[env] = env_path
     return env_folders
 
+def copy_excel_file(source_path, destination_folder, feature_name):
+    """Copies and renames the ACC_Template.xlsx to match the feature name."""
+    dest_file = os.path.join(destination_folder, f"{feature_name}.xlsx")
+    shutil.copy(source_path, dest_file)
+
 def generate_spl_files(env_folders, alert_hq, alert_blueprint):
-    """Generate .spl files for each environment based on Alert Blueprint"""
-    base_id = int(alert_hq.iloc[6, 1])  # B7 in Alert HQ
-    app_name = str(alert_hq.iloc[1, 1]).strip()  # B2 in Alert HQ
+    """Generates SPL files in each environment folder."""
+    base_id = int(str(alert_hq.iloc[6, 1]).strip())  # Get ID from B7
+    app_name = str(alert_hq.iloc[1, 1]).strip()  # Get APP-NAME from B2
+    envs = str(alert_hq.iloc[2, 1]).split(",")  # Get ENV list from B3
 
-    for index, row in alert_blueprint.iloc[1:].iterrows():  # Skip header
-        title = str(row[0]).strip().title().replace(" ", "")  # A column (Title)
-        severity = str(row[1]).strip()  # B column (Severity)
-        spl_content = str(row[2]).strip()  # C column (SPL Query)
+    for _, row in alert_blueprint.iterrows():
+        title = row["A"]
+        severity = row["B"]
+        query = row["C"]
 
-        for env, env_folder in env_folders.items():
-            file_id = base_id
-            file_name = f"CERA-{app_name}-{file_id}-{severity}-{env}-{app_name}-{title}.spl"
-            file_path = os.path.join(env_folder, file_name)
-            
-            # Replace cf_space_name in SPL content
-            updated_content = spl_content.replace('cf_space_name=""', f'cf_space_name="{env}"')
+        for env in envs:
+            current_id = base_id
+            file_name = f"CERA-APP-{current_id}-{severity}-{env.strip()}-{app_name}-{title.replace(' ', '')}.spl"
+            file_path = os.path.join(env_folders[env.strip()], file_name)
 
-            # Write to SPL file
-            with open(file_path, "w") as file:
-                file.write(updated_content)
+            # Modify cf_space_name inside the query
+            query_modified = query.replace('cf_space_name=""', f'cf_space_name="{env.strip()}"')
+
+            # Write to .spl file
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(query_modified)
             
             base_id += 1  # Increment ID for next file
 
 def main():
-    alert_hq, alert_blueprint = load_excel()
-    feature_folder, _ = create_feature_folder(alert_hq)
-    env_folders = create_env_folders(feature_folder, alert_hq)
-    generate_spl_files(env_folders, alert_hq, alert_blueprint)
+    # Specify paths
+    base_path = ""  # 🔹 YOU SET THIS PATH (e.g., "C:\\Users\\e150819\\Mastercard\\Automation")
+    excel_file = os.path.join(base_path, "CERA_AUTO_ALERTS", "ACC_Template", "ACC_Template.xlsx")
 
-    print("SPL file generation completed successfully!")
+    # Load data
+    alert_hq, alert_blueprint = load_excel(excel_file)
+
+    # Get feature name from B1 in Alert HQ
+    feature_name = str(alert_hq.iloc[0, 1]).strip()
+
+    # Create feature folder
+    feature_folder = create_feature_folder(base_path, feature_name)
+
+    # Create environment folders
+    env_list = str(alert_hq.iloc[2, 1]).split(",")  # B3 has ENV list
+    env_folders = create_env_folders(feature_folder, env_list)
+
+    # Copy and rename the Excel template
+    copy_excel_file(excel_file, feature_folder, feature_name)
+
+    # Generate SPL files
+    generate_spl_files(env_folders, alert_hq, alert_blueprint)
 
 if __name__ == "__main__":
     main()
