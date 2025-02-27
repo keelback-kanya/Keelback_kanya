@@ -3,63 +3,82 @@ import shutil
 import pandas as pd
 
 # Hardcoded base folder path
-BASE_PATH = r"D:\Projects\CERA_ALERTS"
-TEMPLATE_PATH = os.path.join(BASE_PATH, "ACC_TEMPLATE", "ACC_Template.xlsx")
+BASE_FOLDER_PATH = "C:/CERA_ALERTS/"
+TEMPLATE_FOLDER = os.path.join(BASE_FOLDER_PATH, "ACC_TEMPLATE")
+TEMPLATE_FILE = os.path.join(TEMPLATE_FOLDER, "ACC_Template.xlsx")
 
 def create_feature_folder(feature_number):
-    """Creates a feature-specific folder inside CERA_ALERTS."""
-    feature_folder = os.path.join(BASE_PATH, feature_number)
+    """Creates a feature folder inside BASE_FOLDER_PATH"""
+    feature_folder = os.path.join(BASE_FOLDER_PATH, feature_number)
     os.makedirs(feature_folder, exist_ok=True)
     return feature_folder
 
-def copy_excel_template(feature_folder, feature_number):
-    """Copies the ACC_Template.xlsx and renames it inside the feature folder."""
+def copy_excel_to_feature_folder(feature_folder, feature_number):
+    """Copies the ACC Template Excel file into the feature folder and renames it"""
     new_excel_path = os.path.join(feature_folder, f"{feature_number}_ACC.xlsx")
-    shutil.copy(TEMPLATE_PATH, new_excel_path)
+    shutil.copy(TEMPLATE_FILE, new_excel_path)
     return new_excel_path
 
-def extract_data_from_excel(excel_path):
-    """Extracts Feature Number (B1) and Environments (B3) from Alert HQ."""
-    df_hq = pd.read_excel(excel_path, sheet_name="Alert HQ", header=None)
+def read_excel_sheets(excel_path):
+    """Reads required sheets from the Excel file"""
+    xls = pd.ExcelFile(excel_path)
+    alert_hq = pd.read_excel(xls, sheet_name="Alert HQ")
+    alert_blueprint = pd.read_excel(xls, sheet_name="Alert Blueprint")
+    return alert_hq, alert_blueprint
 
-    feature_number = str(df_hq.iloc[0, 1]).strip()  # B1
-    environments = str(df_hq.iloc[2, 1]).strip()  # B3
-    
-    if not feature_number or feature_number.lower() == "nan":
-        raise ValueError("Feature Number (B1) is missing or invalid.")
-    
-    env_list = [env.strip().upper() for env in environments.split(",") if env.strip()]
-    
-    return feature_number, env_list
-
-def create_environment_folders(feature_folder, env_list):
-    """Creates subfolders for each environment inside the feature folder."""
+def create_env_folders(feature_folder, env_list):
+    """Creates subfolders for each environment inside the feature folder"""
+    env_folders = {}
     for env in env_list:
-        env_folder = os.path.join(feature_folder, env)
-        os.makedirs(env_folder, exist_ok=True)
+        env_path = os.path.join(feature_folder, env.strip())
+        os.makedirs(env_path, exist_ok=True)
+        env_folders[env.strip()] = env_path
+    return env_folders
 
+def generate_spl_files(env_folders, alert_hq, alert_blueprint):
+    """Generates .spl files with updated cf_space_name"""
+    base_id = int(alert_hq.iloc[6, 1])  # ID from B7 in Alert HQ
+    app_name = alert_hq.iloc[1, 1]  # APP-NAME from B2 in Alert HQ
+    env_list = alert_hq.iloc[2, 1].split(",")  # ENV List from B3
+
+    for index, row in alert_blueprint.iterrows():
+        if index == 0:
+            continue  # Skip header row
+
+        title = row[0]  # Title from Column A
+        severity = row[1]  # Severity from Column B
+        query = row[2]  # Query from Column C
+
+        formatted_title = "-".join(word.capitalize() for word in title.split())  # Title Formatting
+
+        for env in env_list:
+            env = env.strip()
+            current_id = base_id
+            spl_file_name = f"CERA-APP-{current_id}-{severity}-{env}-{app_name}-{formatted_title}.spl"
+            spl_file_path = os.path.join(env_folders[env], spl_file_name)
+
+            # Update cf_space_name in query
+            updated_query = query.replace('cf_space_name=""', f'cf_space_name="{env}"')
+
+            # Write to .spl file
+            with open(spl_file_path, "w", encoding="utf-8") as spl_file:
+                spl_file.write(updated_query)
+
+            base_id += 1  # Increment ID for next file
+
+# Main Execution
 def main():
-    try:
-        print("Processing Excel file...")
-        
-        # Step 1: Extract Data from Excel
-        feature_number, env_list = extract_data_from_excel(TEMPLATE_PATH)
-        
-        # Step 2: Create Feature Folder
-        feature_folder = create_feature_folder(feature_number)
-        
-        # Step 3: Copy and Rename Excel Template
-        new_excel_path = copy_excel_template(feature_folder, feature_number)
-        
-        # Step 4: Create Environment Folders
-        create_environment_folders(feature_folder, env_list)
+    alert_hq, alert_blueprint = read_excel_sheets(TEMPLATE_FILE)
+    feature_number = str(alert_hq.iloc[0, 1])  # Feature Number from B1 of Alert HQ
 
-        print(f"✅ Successfully created folders for Feature: {feature_number}")
-        print(f"📂 Location: {feature_folder}")
-        print(f"🗂️ Subfolders: {', '.join(env_list)}")
+    feature_folder = create_feature_folder(feature_number)
+    copied_excel_path = copy_excel_to_feature_folder(feature_folder, feature_number)
 
-    except Exception as e:
-        print(f"❌ Error: {e}")
+    alert_hq, alert_blueprint = read_excel_sheets(copied_excel_path)
+    env_list = alert_hq.iloc[2, 1].split(",")  # ENV List from B3
+
+    env_folders = create_env_folders(feature_folder, env_list)
+    generate_spl_files(env_folders, alert_hq, alert_blueprint)
 
 if __name__ == "__main__":
     main()
