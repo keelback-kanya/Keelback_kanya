@@ -35,23 +35,7 @@ def validate_excel_data():
 
 # Calculate Total Files
 def calculate_file_count(df_hq, df_blueprint):
-    # Debugging: Check the columns of df_hq
-    print("Columns in df_hq:", df_hq.columns)
-    
-    # Debugging: Check the shape of df_hq
-    print("Shape of df_hq:", df_hq.shape)
-    
-    # Debugging: Print the first few rows of df_hq
-    print("First few rows of df_hq:")
-    print(df_hq.head())
-
-    try:
-        envs = df_hq.iloc[0, 2].split(",")  # Alert HQ B3
-    except IndexError as e:
-        print(f"ERROR: IndexError - {e}")
-        print("df_hq seems to have fewer columns. Please verify the Excel structure.")
-        exit(1)
-
+    envs = df_hq.iloc[2, 1].split(",")  # Alert HQ B3 contains environments
     titles = df_blueprint.iloc[:, 0].dropna().tolist()  # Alert Blueprint Column A
     total_files = len(envs) * len(titles) * 2  # Includes .spl and .properties
     print(f"Total files to be created: {total_files}")
@@ -66,8 +50,8 @@ def get_user_input():
         print("ERROR: Invalid input. Enter exactly 5 digits.")
 
 # Create Feature & Env Folders
-def create_folders(feature_num, envs):
-    feature_folder = os.path.join(BASE_PATH, feature_num)
+def create_folders(feature_num, envs, base_dir):
+    feature_folder = os.path.join(base_dir, feature_num)
     os.makedirs(feature_folder, exist_ok=True)
 
     env_folders = {}
@@ -104,9 +88,9 @@ def generate_spl_files(df_blueprint, feature_folder, env_folders, cera_id, app_n
     return log_data
 
 # Generate .properties Files
-def generate_properties_files(df_hq, df_blueprint, feature_folder, env_folders):
+def generate_properties_files(df_hq, df_blueprint, feature_folder, env_folders, app_name):
     log_data = []
-    link = df_hq.iloc[0, 3]  # Alert HQ B4
+    link = df_hq.iloc[3, 1]  # Alert HQ B4 contains SOPs Link
     for env, env_path in env_folders.items():
         for _, row in df_blueprint.iterrows():
             title = row["Title"]
@@ -154,16 +138,29 @@ def create_validation_log(feature_folder, log_data):
 
 # Main Execution
 if __name__ == "__main__":
+    # Validate Excel Data
     df_hq, df_blueprint = validate_excel_data()
+
+    # Calculate File Count
     envs, titles = calculate_file_count(df_hq, df_blueprint)
+
+    # Get User Input for CERA ID
     cera_id = get_user_input()
 
-    feature_num = str(df_hq.iloc[0, 0])  # Alert HQ B1
-    app_name = df_hq.iloc[0, 1]  # Alert HQ B2
+    # Feature Number and App Name from HQ
+    feature_num = str(df_hq.iloc[0, 1])  # Feature Number in Alert HQ B1
+    app_name = df_hq.iloc[1, 1]  # App Name in Alert HQ B2
 
-    feature_folder, env_folders = create_folders(feature_num, envs)
+    # Create Folders for Feature and Environments
+    feature_folder, env_folders = create_folders(feature_num, envs, BASE_PATH)
+
+    # Generate SPL Files
     spl_log = generate_spl_files(df_blueprint, feature_folder, env_folders, cera_id, app_name)
-    properties_log = generate_properties_files(df_hq, df_blueprint, feature_folder, env_folders)
-    
+
+    # Generate Properties Files
+    properties_log = generate_properties_files(df_hq, df_blueprint, feature_folder, env_folders, app_name)
+
+    # Create Validation Log
     create_validation_log(feature_folder, spl_log + properties_log)
+
     print("Script execution completed.")
