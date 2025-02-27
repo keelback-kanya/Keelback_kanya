@@ -1,73 +1,78 @@
 import os
+import shutil
 import pandas as pd
 
-# Input: Base Path
-base_path = r""  # Provide the path where CERA_AUTO_ALERTS is located
+# User-defined base path (Update as needed)
+base_path = r""  # Set this before running
 
-# Load Excel File
-acc_template_path = os.path.join(base_path, "ACC_Template", "ACC_Template.xlsx")
-xls = pd.ExcelFile(acc_template_path)
+def create_folders_and_copy_excel():
+    """Creates feature folder, env folders, and copies the Excel file."""
+    acc_template_path = os.path.join(base_path, "ACC_Template")
+    
+    # Locate Excel file
+    excel_file = next((f for f in os.listdir(acc_template_path) if f.endswith(".xlsx")), None)
+    if not excel_file:
+        raise FileNotFoundError("No Excel file found in ACC_Template.")
 
-# Read Alert HQ and Alert Blueprint sheets
-alert_hq = xls.parse("Alert HQ", header=None)
-alert_blueprint = xls.parse("Alert Blueprint")
+    excel_path = os.path.join(acc_template_path, excel_file)
+    df_hq = pd.read_excel(excel_path, sheet_name="Alert HQ", header=None)
+    
+    # Get Feature Number (B1) and Env List (B3)
+    feature_num = str(df_hq.iloc[0, 1]).strip()  
+    env_list = [env.strip() for env in str(df_hq.iloc[2, 1]).split(",")]
 
-# Step 1: Extract values from Alert HQ
-feature_num = str(alert_hq.iloc[0, 1]).strip()  # B1
-env_list = str(alert_hq.iloc[2, 1]).strip().split(",")  # B3 (comma-separated envs)
+    # Create Feature Folder
+    feature_folder = os.path.join(base_path, feature_num)
+    os.makedirs(feature_folder, exist_ok=True)
+    print(f"Feature Folder Created: {feature_folder}")
 
-# Step 2: Create Feature Folder
-feature_folder = os.path.join(base_path, feature_num)
-os.makedirs(feature_folder, exist_ok=True)
-print(f"Feature folder created: {feature_folder}")
+    # Copy and Rename Excel File
+    new_excel_name = f"ACC_{feature_num}.xlsx"
+    new_excel_path = os.path.join(feature_folder, new_excel_name)
+    shutil.copy(excel_path, new_excel_path)
+    print(f"Copied and Renamed Excel File: {new_excel_path}")
 
-# Step 3: Create Environment Folders
-env_folders = {}
-for env in env_list:
-    env_path = os.path.join(feature_folder, env.strip())
-    os.makedirs(env_path, exist_ok=True)
-    env_folders[env.strip()] = env_path
-    print(f"Environment folder created: {env_path}")
+    # Create Environment Folders
+    env_paths = {}
+    for env in env_list:
+        env_folder = os.path.join(feature_folder, env)
+        os.makedirs(env_folder, exist_ok=True)
+        env_paths[env] = env_folder
+        print(f"Env Folder Created: {env_folder}")
+    
+    return feature_folder, env_paths, new_excel_path
 
-# Step 4: Copy and Rename Excel File
-renamed_excel_path = os.path.join(feature_folder, f"ACC_{feature_num}.xlsx")
-os.system(f'copy "{acc_template_path}" "{renamed_excel_path}"')
-print(f"Excel file copied and renamed to: {renamed_excel_path}")
+def generate_spl_files(feature_folder, env_paths, excel_path, start_id):
+    """Creates SPL files based on Alert Blueprint and modifies the query."""
+    df_blueprint = pd.read_excel(excel_path, sheet_name="Alert Blueprint")
+    
+    # Validate ID format
+    if not start_id.isdigit() or len(start_id) != 5:
+        raise ValueError("Invalid ID! Must be a 5-digit number.")
 
-# Step 5: Generate SPL Files
-start_id = input("Enter starting CERA ID (5-digit): ").strip()
-if not start_id.isdigit() or len(start_id) != 5:
-    raise ValueError("Invalid input! CERA ID must be a 5-digit number.")
+    current_id = int(start_id)
 
-start_id = int(start_id)
-
-# Iterate through each environment
-for env in env_list:
-    env = env.strip()
-    env_path = env_folders[env]
-
-    # Iterate through each row in Alert Blueprint
-    for index, row in alert_blueprint.iterrows():
+    for _, row in df_blueprint.iterrows():
         title = row["Title"].strip()
         severity = row["Severity"].strip()
-        query = row["Log Message/Query"]
+        query = row["Log Message/Query"].strip()
+        
+        for env, env_folder in env_paths.items():
+            # Modify Query
+            modified_query = query.replace('cf_space_name=""', f'cf_space_name="{env}"')
 
-        # Insert environment in query
-        if 'cf_space_name=""' in query:
-            query = query.replace('cf_space_name=""', f'cf_space_name="{env}"')
+            # Generate SPL File Name
+            spl_filename = f"CERA-APP-{str(current_id).zfill(5)}-{severity}-{env}-APP-{title}.spl"
+            spl_filepath = os.path.join(env_folder, spl_filename)
 
-        # Generate SPL file name
-        spl_id = f"{start_id:05d}"  # Ensure 5-digit ID
-        spl_filename = f"CERA-APP-{spl_id}-{severity}-{env}-test-{title}.spl"
-        spl_filepath = os.path.join(env_path, spl_filename)
+            # Write SPL File
+            with open(spl_filepath, "w") as spl_file:
+                spl_file.write(modified_query)
 
-        # Write query to SPL file
-        with open(spl_filepath, "w") as spl_file:
-            spl_file.write(query)
+            print(f"SPL File Created: {spl_filepath}")
+            current_id += 1  # Increment ID
 
-        print(f"SPL file created: {spl_filepath}")
-        start_id += 1  # Increment ID for next file
-
-# Step 6: Print Summary
-total_files = len(env_list) * len(alert_blueprint)
-print(f"\nTotal SPL files created: {total_files}")
+if __name__ == "__main__":
+    feature_folder, env_paths, excel_path = create_folders_and_copy_excel()
+    user_input_id = input("Enter 5-digit starting CERA ID: ")
+    generate_spl_files(feature_folder, env_paths, excel_path, user_input_id)
