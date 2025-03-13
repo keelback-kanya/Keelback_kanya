@@ -1,103 +1,69 @@
 import pandas as pd
 
-def load_data(input_file):
-    return pd.read_excel(input_file)
-
-def fill_missing_owners(df):
-    df['Owner'] = df['Owner'].fillna('Unassigned')
-    return df
-
-def classify_certificates(df):
-    signing_keywords = ["MC CA Signing", "Pre Approved", "Public CA Signing", "Third Party Handling", "External"]
-    type_keywords = ["JKS", "APACHE", "F5", "PEM", "PKCS", "BASIC", "ADAPTABLE", "DESKTOP"]
-    
-    df['Internal/External'] = df['Folder'].apply(lambda x: 'External' if 'external' in str(x).lower() else 'Internal')
-    df['Signing Type'] = df['Folder'].apply(lambda x: next((keyword for keyword in signing_keywords if keyword.lower() in str(x).lower()), 'OTHER'))
-    df['Type'] = df['Installation Type'].apply(lambda x: next((keyword for keyword in type_keywords if keyword in str(x).upper()), 'OTHER'))
-    df['Domain'] = df['Common Name'].apply(lambda x: 'MC Domain' if 'mastercard' in str(x).lower() else 'NON MC Domain')
-    
-    return df
-
-def extract_ids(df):
-    def extract_id(comments, prefix):
-        words = str(comments).split()
-        for word in words:
-            if word.startswith(prefix) and len(word) == 15:
-                return word
-        return ""
-
-    df['MC Prod ID'] = df['Comments'].apply(lambda x: extract_id(x, 'mcprod'))
-    df['WO number'] = df['Comments'].apply(lambda x: extract_id(x, 'WO'))
-    df['CRQ number'] = df['Comments'].apply(lambda x: extract_id(x, 'CRQ'))
-    
-    return df
-
-def set_status_and_stage(df):
-    df['CURRENT STATUS'] = df['Status'].apply(lambda x: 'Expiring' if x.lower() == 'expiring' else ('Renewed' if x.lower() == 'completed' else 'Retired'))
-    df['Stage'] = df['Status'].apply(lambda x: 'Cert Secured' if x.lower() == 'completed' else ('Phased Out' if x.lower() == 'none' else ''))
-    
-    f5_mc_domain = (df['Type'] == 'F5') & (df['Domain'] == 'MC Domain')
-    df.loc[f5_mc_domain, 'Stage'] = 'AUTOMATION'
-    df.loc[f5_mc_domain, 'CURRENT STATUS'] = 'AUTOMATED'
-    
-    unassigned_expiring = df['Owner'] == 'Unassigned'
-    df.loc[unassigned_expiring, 'CURRENT STATUS'] = 'Expiring'
-    df.loc[unassigned_expiring, 'Stage'] = 'Expiring'
-
-    return df
-
-def consolidate_certificates(df):
-    grouped = df.groupby('Nickname').agg({
-        'Owner': 'first',
-        'Environment': 'first',
-        'Internal/External': 'first',
-        'Valid To': 'first',
-        'Signing Type': 'first',
-        'Type': 'first',
-        'Domain': 'first',
-        'Stage': 'first',
-        'MC Prod ID': 'first',
-        'WO number': 'first',
-        'CRQ number': 'first',
-        'Comments': 'first',
-        'Serial number': 'first',
-        'New Serial number': 'first',
-        'CURRENT STATUS': 'first',
-        'Folder': 'first',
-        'Common Name': 'first',
-        'Key Size': 'first',
-        'Issuer': 'first',
-        'Program Name': 'first',
-        'Contact': 'first',
-        'Installations': 'first',
-        'Installation Type': 'first',
-        'Device': 'first',
-        'Server name': lambda x: ', '.join(x.dropna().unique())
-    }).reset_index()
-
-    return grouped
-
-def split_certificates(df):
-    automated = df[df['Stage'] == 'AUTOMATION']
-    manual = df[df['Stage'] != 'AUTOMATION']
-    return manual, automated
-
-def save_to_excel(manual, automated, output_file):
-    with pd.ExcelWriter(output_file) as writer:
-        manual.to_excel(writer, sheet_name='Manual Certs', index=False)
-        automated.to_excel(writer, sheet_name='Automated Certs', index=False)
-
-def process_certificates(input_file, output_file):
-    df = load_data(input_file)
-    df = fill_missing_owners(df)
-    df = classify_certificates(df)
-    df = extract_ids(df)
-    df = set_status_and_stage(df)
-    df = consolidate_certificates(df)
-    manual, automated = split_certificates(df)
-    save_to_excel(manual, automated, output_file)
-
 input_file = "your_input_file.xlsx"
 output_file = "your_output_file.xlsx"
-process_certificates(input_file, output_file)
-print("Processing complete. Certificates saved.")
+
+df = pd.read_excel(input_file)
+
+df["Owner"] = df["Owner"].fillna("Unassigned")
+df["Internal/External"] = df["Folder"].apply(lambda x: "External" if "external" in str(x).lower() else "Internal")
+
+signing_keywords = ["MC CA Signing", "Pre Approved", "Public CA Signing", "Third Party Handling", "External"]
+df["Signing Type"] = "OTHER"
+for keyword in signing_keywords:
+    df.loc[df["Folder"].str.contains(keyword, case=False, na=False), "Signing Type"] = keyword
+
+type_keywords = ["JKS", "APACHE", "F5", "PEM", "PKCS", "BASIC", "ADAPTABLE", "DESKTOP"]
+df["Type"] = "OTHER"
+for keyword in type_keywords:
+    df.loc[df["Installation Type"].str.contains(keyword, case=False, na=False), "Type"] = keyword
+df.loc[df["Type"] == "OTHER", "Type"] = df["Installation Type"].str.split("-").str[0]
+
+df["Server name"] = df["Device"].str.split("(").str[0].str.strip()
+df["Domain"] = df["Common Name"].apply(lambda x: "MC Domain" if "mastercard" in str(x).lower() else "NON MC Domain")
+
+df["Stage"] = df["Status"].apply(lambda x: "Cert Secured" if str(x).lower() == "completed" else ("Phased Out" if str(x).lower() == "none" else ""))
+df["CURRENT STATUS"] = df["Status"].apply(lambda x: "Renewed" if str(x).lower() == "completed" else ("Retired" if str(x).lower() == "none" else "Expiring"))
+
+df["MC Prod ID"] = df["Comments"].str.extract(r"(MCProd\w+)", expand=False)
+df["WO number"] = df["Comments"].str.extract(r"(WO\d{12})", expand=False)
+df["CRQ number"] = df["Comments"].str.extract(r"(CRQ\d{12})", expand=False)
+
+df.loc[(df["Type"] == "F5") & (df["Domain"] == "MC Domain"), ["Stage", "CURRENT STATUS"]] = ["AUTOMATION", "AUTOMATED"]
+
+df = df.groupby("Nickname", as_index=False).agg({
+    "Owner": "first",
+    "Environment": "first",
+    "Internal/External": "first",
+    "Valid To": "first",
+    "Signing Type": "first",
+    "Type": "first",
+    "Server name": lambda x: ", ".join(x.dropna().unique()),
+    "Domain": "first",
+    "Stage": "first",
+    "MC Prod ID": "first",
+    "WO number": "first",
+    "CRQ number": "first",
+    "Comments": "first",
+    "Serial number": "first",
+    "New Serial number": "first",
+    "CURRENT STATUS": "first",
+    "Folder": "first",
+    "Common Name": "first",
+    "Key Size": "first",
+    "Issuer": "first",
+    "Program Name": "first",
+    "Contact": "first",
+    "Installations": "first",
+    "Installation Type": "first",
+    "Device": "first"
+})
+
+manual_certs = df[df["Stage"] != "AUTOMATION"]
+automated_certs = df[df["Stage"] == "AUTOMATION"]
+
+with pd.ExcelWriter(output_file) as writer:
+    manual_certs.to_excel(writer, sheet_name="Manual Certs", index=False)
+    automated_certs.to_excel(writer, sheet_name="Automated Certs", index=False)
+
+print("Processing complete. File saved as:", output_file)
