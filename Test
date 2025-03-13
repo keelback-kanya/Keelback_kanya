@@ -1,69 +1,120 @@
-import pandas as pd
+import os
+from openpyxl import load_workbook, Workbook
 
-input_file = "your_input_file.xlsx"
-output_file = "your_output_file.xlsx"
+folder_path = r"C:\path\to\your\folder"
+xlsx_files = [f for f in os.listdir(folder_path) if f.endswith(".xlsx")]
+if len(xlsx_files) != 1:
+    raise ValueError("Folder must contain exactly one XLSX file.")
 
-df = pd.read_excel(input_file)
+input_file = os.path.join(folder_path, xlsx_files[0])
+output_file = os.path.join(folder_path, "OUTPUTCHECK.xlsx")
 
-df["Owner"] = df["Owner"].fillna("Unassigned")
-df["Internal/External"] = df["Folder"].apply(lambda x: "External" if "external" in str(x).lower() else "Internal")
+columns_order = [
+    "Owner", "Nickname", "Environment", "Internal/External", "Valid To", "Signing Type", "Type",
+    "Server name", "Domain", "Stage", "MC Prod ID", "WO number", "CRQ number",
+    "Comments", "Serial number", "New Serial number", "CURRENT STATUS",
+    "Folder", "Common Name", "Key Size", "Issuer", "Program Name", "Contact",
+    "Installations", "Installation Type", "Device"
+]
 
 signing_keywords = ["MC CA Signing", "Pre Approved", "Public CA Signing", "Third Party Handling", "External"]
-df["Signing Type"] = "OTHER"
-for keyword in signing_keywords:
-    df.loc[df["Folder"].str.contains(keyword, case=False, na=False), "Signing Type"] = keyword
-
 type_keywords = ["JKS", "APACHE", "F5", "PEM", "PKCS", "BASIC", "ADAPTABLE", "DESKTOP"]
-df["Type"] = "OTHER"
-for keyword in type_keywords:
-    df.loc[df["Installation Type"].str.contains(keyword, case=False, na=False), "Type"] = keyword
-df.loc[df["Type"] == "OTHER", "Type"] = df["Installation Type"].str.split("-").str[0]
 
-df["Server name"] = df["Device"].str.split("(").str[0].str.strip()
-df["Domain"] = df["Common Name"].apply(lambda x: "MC Domain" if "mastercard" in str(x).lower() else "NON MC Domain")
+wb = load_workbook(input_file)
+sheet = wb.active
+header = [cell.value for cell in sheet[1]]
+data = []
 
-df["Stage"] = df["Status"].apply(lambda x: "Cert Secured" if str(x).lower() == "completed" else ("Phased Out" if str(x).lower() == "none" else ""))
-df["CURRENT STATUS"] = df["Status"].apply(lambda x: "Renewed" if str(x).lower() == "completed" else ("Retired" if str(x).lower() == "none" else "Expiring"))
+for row in sheet.iter_rows(min_row=2, values_only=True):
+    row_dict = dict(zip(header, row))
+    new_row = {}
+    new_row["Owner"] = (row_dict.get("Owner") or "").strip() or "Unassigned"
+    new_row["Nickname"] = (row_dict.get("Nickname") or "").strip()
+    new_row["Environment"] = (row_dict.get("01 Environment") or "").strip()
+    folder_value = (row_dict.get("Folder") or "").lower()
+    new_row["Internal/External"] = "External" if "external" in folder_value else "Internal"
+    new_row["Valid To"] = (row_dict.get("Valid To") or "").strip()
+    new_row["Signing Type"] = "OTHER"
+    
+    for keyword in signing_keywords:
+        if keyword.lower() in folder_value:
+            new_row["Signing Type"] = keyword
+            break
 
-df["MC Prod ID"] = df["Comments"].str.extract(r"(MCProd\w+)", expand=False)
-df["WO number"] = df["Comments"].str.extract(r"(WO\d{12})", expand=False)
-df["CRQ number"] = df["Comments"].str.extract(r"(CRQ\d{12})", expand=False)
+    install_type = (row_dict.get("Installation Type") or "").upper()
+    new_row["Type"] = "OTHER"
+    
+    for keyword in type_keywords:
+        if keyword in install_type:
+            new_row["Type"] = keyword
+            break
+    if new_row["Type"] == "OTHER" and "-" in install_type:
+        new_row["Type"] = install_type.split("-")[0]
 
-df.loc[(df["Type"] == "F5") & (df["Domain"] == "MC Domain"), ["Stage", "CURRENT STATUS"]] = ["AUTOMATION", "AUTOMATED"]
+    device_value = (row_dict.get("Device") or "").strip()
+    new_row["Server name"] = device_value.split("(")[0].strip()
+    common_name = (row_dict.get("Common Name") or "").lower()
+    new_row["Domain"] = "MC Domain" if "mastercard" in common_name else "NON MC Domain"
+    status_value = (row_dict.get("Status") or "").strip().lower()
+    
+    if status_value == "completed":
+        new_row["Stage"] = "Cert Secured"
+    elif status_value == "none":
+        new_row["Stage"] = "Phased Out"
+    else:
+        new_row["Stage"] = ""
 
-df = df.groupby("Nickname", as_index=False).agg({
-    "Owner": "first",
-    "Environment": "first",
-    "Internal/External": "first",
-    "Valid To": "first",
-    "Signing Type": "first",
-    "Type": "first",
-    "Server name": lambda x: ", ".join(x.dropna().unique()),
-    "Domain": "first",
-    "Stage": "first",
-    "MC Prod ID": "first",
-    "WO number": "first",
-    "CRQ number": "first",
-    "Comments": "first",
-    "Serial number": "first",
-    "New Serial number": "first",
-    "CURRENT STATUS": "first",
-    "Folder": "first",
-    "Common Name": "first",
-    "Key Size": "first",
-    "Issuer": "first",
-    "Program Name": "first",
-    "Contact": "first",
-    "Installations": "first",
-    "Installation Type": "first",
-    "Device": "first"
-})
+    comments = (row_dict.get("Comments") or "").strip()
+    new_row["MC Prod ID"] = ""
+    if "mcprod" in comments.lower():
+        for word in comments.split():
+            if word.lower().startswith("mcprod") and len(word) >= 7:
+                new_row["MC Prod ID"] = word
+                break
 
-manual_certs = df[df["Stage"] != "AUTOMATION"]
-automated_certs = df[df["Stage"] == "AUTOMATION"]
+    new_row["WO number"] = ""
+    if "WO" in comments:
+        for word in comments.split():
+            if word.startswith("WO") and len(word) == 15:
+                new_row["WO number"] = word
+                break
 
-with pd.ExcelWriter(output_file) as writer:
-    manual_certs.to_excel(writer, sheet_name="Manual Certs", index=False)
-    automated_certs.to_excel(writer, sheet_name="Automated Certs", index=False)
+    new_row["CRQ number"] = ""
+    if "CRQ" in comments:
+        for word in comments.split():
+            if word.startswith("CRQ") and len(word) == 15:
+                new_row["CRQ number"] = word
+                break
 
-print("Processing complete. File saved as:", output_file)
+    new_row["Comments"] = comments
+    new_row["Serial number"] = (row_dict.get("Serial Number") or "").strip()
+    new_row["New Serial number"] = ""
+    new_row["CURRENT STATUS"] = "Expiring"
+
+    if status_value == "completed":
+        new_row["CURRENT STATUS"] = "Renewed"
+    elif status_value == "none":
+        new_row["CURRENT STATUS"] = "Retired"
+
+    for col in [
+        "Folder", "Common Name", "Key Size", "Issuer", "Program Name", "Contact",
+        "Installations", "Installation Type", "Device"
+    ]:
+        new_row[col] = (row_dict.get(col) or "").strip()
+
+    if new_row["Type"] == "F5" and new_row["Domain"] == "MC Domain":
+        new_row["Stage"] = "AUTOMATION"
+        new_row["CURRENT STATUS"] = "AUTOMATED"
+
+    data.append(new_row)
+
+output_wb = Workbook()
+output_sheet = output_wb.active
+output_sheet.title = "Processed Data"
+output_sheet.append(columns_order)
+
+for row in data:
+    output_sheet.append([row[col] for col in columns_order])
+
+output_wb.save(output_file)
+print("XLSX processing complete. File saved as:", output_file)
