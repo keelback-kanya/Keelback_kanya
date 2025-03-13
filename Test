@@ -1,166 +1,64 @@
-import os
-import pandas as pd
-import shutil
+import csv
 
-# Global Constants
-BASE_PATH = r"C:\Users\e150819\OneDrive - Mastercard\Documents\CERA_AUTO_ALERTS"
-EXCEL_PATH = os.path.join(BASE_PATH, "ACC_Template", "your_file.xlsx")  # Update with actual filename
-DEFAULT_PROPERTIES_PATH = os.path.join(BASE_PATH, "ACC_Template", "default.properties")
+input_file = "your_input_file.csv"
+output_file = "your_output_file.xlsx"
 
-# Environment Mapping
-ENV_MAPPING = {
-    "PERF": "perf",
-    "MTF1": "mtf",
-    "MTF2": "mtf2",
-    "DEMO": "demo",
-    "PROD-GLOBAL": "prod",
-    "PROD-IOS": "prod"
-}
+columns_order = [
+    "Owner", "Nickname", "Environment", "Internal/External", "Valid To", "Signing Type", "Type",
+    "Server name", "Domain", "Stage", "MC Prod ID", "WO number", "CRQ number",
+    "Comments", "Serial number", "New Serial number", "CURRENT STATUS",
+    "Folder", "Common Name", "Key Size", "Issuer", "Program Name", "Contact",
+    "Installations", "Installation Type", "Device"
+]
 
-# Validate Excel Data
-def validate_excel_data():
-    try:
-        df_hq = pd.read_excel(EXCEL_PATH, sheet_name="Alert HQ")
-        df_blueprint = pd.read_excel(EXCEL_PATH, sheet_name="Alert Blueprint")
+manual_certs = []
+automated_certs = []
 
-        if df_hq.isnull().values.any() or df_blueprint.isnull().values.any():
-            print("ERROR: Missing values in the template. Please check the Excel file.")
-            exit(1)
-        
-        print("Template accepted. Proceeding with alert creation.")
-        return df_hq, df_blueprint
-    except Exception as e:
-        print(f"ERROR: Failed to read Excel file: {e}")
-        exit(1)
+with open(input_file, mode='r', encoding='utf-8') as infile:
+    reader = csv.DictReader(infile)
+    certs = {}
 
-# Calculate Total Files
-def calculate_file_count(df_hq, df_blueprint):
-    envs = df_hq.iloc[2, 1].split(",")  # Alert HQ B3 contains environments
-    titles = df_blueprint.iloc[:, 0].dropna().tolist()  # Alert Blueprint Column A
-    total_files = len(envs) * len(titles) * 2  # Includes .spl and .properties
-    print(f"Total files to be created: {total_files}")
-    return envs, titles
+    for row in reader:
+        nickname = row.get("Nickname", "").strip()
+        server_name = row.get("Device", "").split("(")[0].strip()
+        owner = row.get("Owner", "").strip() or "Unassigned"
+        stage = row.get("Stage", "").strip()
+        status = row.get("CURRENT STATUS", "").strip()
 
-# Get Valid CERA ID
-def get_user_input():
-    while True:
-        cera_id = input("Enter starting CERA ID (5 digits): ")
-        if cera_id.isdigit() and len(cera_id) == 5:
-            return int(cera_id)
-        print("ERROR: Invalid input. Enter exactly 5 digits.")
+        key = (nickname, owner)
+        if key not in certs:
+            certs[key] = {col: row.get(col, "").strip() for col in columns_order}
+            certs[key]["Server name"] = server_name
+        else:
+            certs[key]["Server name"] += f", {server_name}"
 
-# Create Feature & Env Folders
-def create_folders(feature_num, envs, base_dir):
-    feature_folder = os.path.join(base_dir, feature_num)
-    os.makedirs(feature_folder, exist_ok=True)
+    for cert in certs.values():
+        if cert["Owner"] == "Unassigned":
+            cert["CURRENT STATUS"] = "Expiring"
+            cert["Stage"] = "Expiring"
 
-    env_folders = {}
-    for env in envs:
-        mapped_env = ENV_MAPPING.get(env.strip(), env.strip().lower())
-        env_path = os.path.join(feature_folder, mapped_env)
-        os.makedirs(env_path, exist_ok=True)
-        env_folders[mapped_env] = env_path
-    
-    print(f"Feature folder created: {feature_folder}")
-    return feature_folder, env_folders
+        if cert["Stage"] == "Automation" and cert["CURRENT STATUS"] == "Automated":
+            automated_certs.append(cert)
+        else:
+            manual_certs.append(cert)
 
-# Generate .spl Files
-def generate_spl_files(df_blueprint, feature_folder, env_folders, cera_id, app_name):
-    log_data = []
-    for env, env_path in env_folders.items():
-        for _, row in df_blueprint.iterrows():
-            title = row["Title"]
-            severity = row["Severity"]
-            query = row["Log Message/Query"].replace('cf_space_name=""', f'cf_space_name="{env}"')
-            spl_filename = f"CERA-{app_name}-{str(cera_id).zfill(5)}-{severity}-{env}-{title}.spl"
-            spl_path = os.path.join(env_path, spl_filename)
+import openpyxl
+from openpyxl import Workbook
 
-            try:
-                with open(spl_path, "w") as file:
-                    file.write(query)
-                log_data.append([spl_filename, "Success"])
-            except Exception as e:
-                log_data.append([spl_filename, f"Failed - {e}"])
+wb = Workbook()
 
-            cera_id += 1  # Increment ID for next file
+# Manual Certs Sheet
+manual_sheet = wb.active
+manual_sheet.title = "Manual Certs"
+manual_sheet.append(columns_order)
+for cert in manual_certs:
+    manual_sheet.append([cert[col] for col in columns_order])
 
-    print(f".spl files generated in: {feature_folder}")
-    return log_data
+# Automated Certs Sheet
+automated_sheet = wb.create_sheet(title="Automated Certs")
+automated_sheet.append(columns_order)
+for cert in automated_certs:
+    automated_sheet.append([cert[col] for col in columns_order])
 
-# Generate .properties Files
-def generate_properties_files(df_hq, df_blueprint, feature_folder, env_folders, app_name):
-    log_data = []
-    link = df_hq.iloc[3, 1]  # Alert HQ B4 contains SOPs Link
-    for env, env_path in env_folders.items():
-        for _, row in df_blueprint.iterrows():
-            title = row["Title"]
-            severity = row["Severity"]
-            alert_rule = row["Alert Rule"]
-            threshold = row["Threshold"]
-            comparator = row["Comparator"]
-            cron_schedule = row["Cron Schedule"]
-            dispatch_time = row["Dispatch Time"]
-
-            spl_filename = f"CERA-{app_name}-{str(cera_id).zfill(5)}-{severity}-{env}-{title}.spl"
-            properties_filename = spl_filename.replace(".spl", ".properties")
-            properties_path = os.path.join(env_path, properties_filename)
-
-            try:
-                with open(DEFAULT_PROPERTIES_PATH, "r") as template:
-                    lines = template.readlines()
-                
-                lines.insert(4, f"{link}\\n\\\n")
-                lines[8] = f"\\n\\ {alert_rule} \\n\\\n"
-                lines[14] = f"{comparator}\n"
-                lines[16] = f"{threshold}\n"
-                lines[34] = f"{dispatch_time}\n"
-                lines[38] = f"{cron_schedule}\n"
-                lines[40] = "0\n"
-                lines[41] = f"api.dispatch.earliest.time=-{dispatch_time}\n"
-                lines[45] = f"{spl_filename.replace('.spl', '')}\n"
-
-                with open(properties_path, "w") as file:
-                    file.writelines(lines)
-                
-                log_data.append([properties_filename, "Success"])
-            except Exception as e:
-                log_data.append([properties_filename, f"Failed - {e}"])
-
-    print(f".properties files generated in: {feature_folder}")
-    return log_data
-
-# Create Validation Log
-def create_validation_log(feature_folder, log_data):
-    log_path = os.path.join(feature_folder, f"{feature_folder}_Validation_Log.xlsx")
-    df_log = pd.DataFrame(log_data, columns=["File Name", "Status"])
-    df_log.to_excel(log_path, index=False)
-    print(f"Validation log created at: {log_path}")
-
-# Main Execution
-if __name__ == "__main__":
-    # Validate Excel Data
-    df_hq, df_blueprint = validate_excel_data()
-
-    # Calculate File Count
-    envs, titles = calculate_file_count(df_hq, df_blueprint)
-
-    # Get User Input for CERA ID
-    cera_id = get_user_input()
-
-    # Feature Number and App Name from HQ
-    feature_num = str(df_hq.iloc[0, 1])  # Feature Number in Alert HQ B1
-    app_name = df_hq.iloc[1, 1]  # App Name in Alert HQ B2
-
-    # Create Folders for Feature and Environments
-    feature_folder, env_folders = create_folders(feature_num, envs, BASE_PATH)
-
-    # Generate SPL Files
-    spl_log = generate_spl_files(df_blueprint, feature_folder, env_folders, cera_id, app_name)
-
-    # Generate Properties Files
-    properties_log = generate_properties_files(df_hq, df_blueprint, feature_folder, env_folders, app_name)
-
-    # Create Validation Log
-    create_validation_log(feature_folder, spl_log + properties_log)
-
-    print("Script execution completed.")
+wb.save(output_file)
+print("Processing complete. File saved as:", output_file)
