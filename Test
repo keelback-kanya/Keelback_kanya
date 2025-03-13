@@ -10,12 +10,20 @@ df = pd.read_excel(xls, sheet_name=xls.sheet_names[0])
 distinct_df = (
     df.groupby("Nickname", as_index=False)
     .agg({
-        col: "first" if col not in ["Server name", "Device"] else lambda x: ", ".join(x.dropna().unique())
+        col: "first" if col not in ["Server name", "Device"] else lambda x: "\n".join(x.dropna().unique())
         for col in df.columns
     })
 )
 
+automated_df = distinct_df[
+    (distinct_df["CURRENT STATUS"] == "AUTOMATED") & (distinct_df["Stage"] == "AUTOMATION")
+]
+
+manual_df = distinct_df.drop(automated_df.index)
+
 with pd.ExcelWriter(output_path, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
     distinct_df.to_excel(writer, sheet_name="Distinct", index=False)
+    manual_df.to_excel(writer, sheet_name="Manual", index=False)
+    automated_df.to_excel(writer, sheet_name="Automated", index=False)
 
-print("Distinct sheet added to OUTPUTCHECK.xlsx!")
+print("Distinct, Manual, and Automated sheets added to OUTPUTCHECK.xlsx!")
