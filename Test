@@ -1,89 +1,60 @@
-import csv
+import openpyxl
+from openpyxl import Workbook
 
-input_file = "your_input_file.csv"
-output_file = "your_output_file.csv"
+input_file = "your_input_file.xlsx"
+output_file = "your_output_file.xlsx"
 
-columns_order = [
-    "Owner", "Nickname", "Environment", "Internal/External", "Valid To", "Signing Type", "Type",
-    "Server name", "Domain", "Stage", "MC Prod ID", "WO number", "CRQ number",
-    "Comments", "Serial number", "New Serial number", "CURRENT STATUS",
-    "Folder", "Common Name", "Key Size", "Issuer", "Program Name", "Contact",
-    "Installations", "Installation Type", "Device"
-]
+wb = openpyxl.load_workbook(input_file)
+sheet = wb.active
 
-with open(input_file, mode='r', encoding='utf-8') as infile:
-    reader = csv.DictReader(infile)
-    manual_certs = []
-    automated_certs = []
-    certs = {}
+headers = [cell.value for cell in sheet[1]]
+data = []
 
-    for row in reader:
-        nickname = row.get("Nickname", "").strip()
-        server_name = row.get("Device", "").strip().split("(")[0].strip()
-        crq_number = ""
-        wo_number = ""
+for row in sheet.iter_rows(min_row=2, values_only=True):
+    data.append(dict(zip(headers, row)))
 
-        comments = row.get("Comments", "")
-        if "CRQ" in comments:
-            for word in comments.split():
-                if word.startswith("CRQ") and len(word) == 15:
-                    crq_number = word
-                    break
-        if "WO" in comments:
-            for word in comments.split():
-                if word.startswith("WO") and len(word) == 15:
-                    wo_number = word
-                    break
+manual_certs = []
+automated_certs = []
 
-        if nickname not in certs:
-            certs[nickname] = {
-                "Owner": row.get("Owner", "").strip() or "Unassigned",
-                "Environment": row.get("01 Environment", "").strip(),
-                "Internal/External": "External" if "external" in row.get("Folder", "").lower() else "Internal",
-                "Valid To": row.get("Valid To", "").strip(),
-                "Signing Type": "OTHER",
-                "Type": row.get("Installation Type", "OTHER").strip().split("-")[0].upper(),
-                "Domain": "MC Domain" if "mastercard" in row.get("Common Name", "").lower() else "NON MC Domain",
-                "Stage": "Expiring",
-                "CURRENT STATUS": "Expiring",
-                "MC Prod ID": "",
-                "WO number": wo_number,
-                "CRQ number": crq_number,
-                "Comments": comments.strip(),
-                "Serial number": row.get("Serial Number", "").strip(),
-                "New Serial number": "",
-                "Folder": row.get("Folder", "").strip(),
-                "Common Name": row.get("Common Name", "").strip(),
-                "Key Size": row.get("Key Size", "").strip(),
-                "Issuer": row.get("Issuer", "").strip(),
-                "Program Name": row.get("Program Name", "").strip(),
-                "Contact": row.get("Contact", "").strip(),
-                "Installations": row.get("Installations", "").strip(),
-                "Installation Type": row.get("Installation Type", "").strip(),
-                "Device": row.get("Device", "").strip(),
-                "Server name": [server_name]
-            }
-        else:
-            if server_name not in certs[nickname]["Server name"]:
-                certs[nickname]["Server name"].append(server_name)
+for row in data:
+    owner = row.get("Owner", "").strip() or "Unassigned"
+    nickname = row.get("Nickname", "").strip()
+    server_name = row.get("Server name", "").strip()
+    status = row.get("Status", "").strip().lower()
+    stage = row.get("Stage", "").strip().lower()
+    crq = ""
+    wo = ""
 
-    for nickname, data in certs.items():
-        data["Server name"] = ", ".join(data["Server name"])
-        if data["Type"] == "F5" and data["Domain"] == "MC Domain":
-            data["Stage"] = "AUTOMATION"
-            data["CURRENT STATUS"] = "AUTOMATED"
-            automated_certs.append(data)
-        else:
-            manual_certs.append(data)
+    comments = row.get("Comments", "")
+    for word in comments.split():
+        if word.startswith("CRQ") and len(word) == 15:
+            crq = word
+        elif word.startswith("WO") and len(word) == 15:
+            wo = word
 
-with open(output_file, mode='w', encoding='utf-8', newline='') as outfile:
-    writer = csv.DictWriter(outfile, fieldnames=columns_order)
-    writer.writeheader()
-    writer.writerows(manual_certs)
+    row.update({"Owner": owner, "CRQ number": crq, "WO number": wo})
 
-with open("automated_certs.csv", mode='w', encoding='utf-8', newline='') as auto_outfile:
-    writer = csv.DictWriter(auto_outfile, fieldnames=columns_order)
-    writer.writeheader()
-    writer.writerows(automated_certs)
+    if owner == "Unassigned":
+        row["Status"] = "Expiring"
+        row["Stage"] = "Expiring"
 
-print("CSV processing complete. Files saved as:", output_file, "and automated_certs.csv")
+    if status == "automated" and stage == "automation":
+        automated_certs.append(row)
+    else:
+        manual_certs.append(row)
+
+output_wb = Workbook()
+manual_sheet = output_wb.active
+manual_sheet.title = "Manual Certs"
+automated_sheet = output_wb.create_sheet("Automated Certs")
+
+manual_sheet.append(headers)
+for row in manual_certs:
+    manual_sheet.append([row.get(col, "") for col in headers])
+
+automated_sheet.append(headers)
+for row in automated_certs:
+    automated_sheet.append([row.get(col, "") for col in headers])
+
+output_wb.save(output_file)
+print(f"Processing complete. File saved as: {output_file}")
