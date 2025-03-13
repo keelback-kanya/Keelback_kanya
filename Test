@@ -1,144 +1,21 @@
-from openpyxl import load_workbook, Workbook
-from datetime import datetime
-
-input_folder = r"C:\Users\e150819\OneDrive - Mastercard\Documents\Test Automation"
-output_file = f"{input_folder}\\OUTPUTCHECK.xlsx"
-
-columns_order = [
-    "Owner", "Nickname", "Environment", "Internal/External", "Valid To", "Signing Type", "Type",
-    "Server name", "Domain", "Stage", "MC Prod ID", "WO number", "CRQ number",
-    "Comments", "Serial number", "New Serial number", "CURRENT STATUS",
-    "Folder", "Common Name", "Key Size", "Issuer", "Program Name", "Contact",
-    "Installations", "Installation Type", "Device"
-]
-
-signing_keywords = ["MC CA Signing", "Pre Approved", "Public CA Signing", "Third Party Handling", "External"]
-type_keywords = ["JKS", "APACHE", "F5", "PEM", "PKCS", "BASIC", "ADAPTABLE", "DESKTOP"]
-
-# Load input file
+import pandas as pd
 import os
-input_files = [f for f in os.listdir(input_folder) if f.endswith(".xlsx") and f != "OUTPUTCHECK.xlsx"]
-input_file = f"{input_folder}\\{input_files[0]}"
 
-wb = load_workbook(input_file)
-sheet = wb.active
+folder_path = r"YOUR_FOLDER_PATH"
+output_path = os.path.join(folder_path, "OUTPUTCHECK.xlsx")
 
-# Get header
-header = [cell.value for cell in sheet[1]]
-data = []
+xls = pd.ExcelFile(output_path)
+df = pd.read_excel(xls, sheet_name=xls.sheet_names[0])
 
-# Process rows
-for row in sheet.iter_rows(min_row=2, values_only=True):
-    row_dict = dict(zip(header, row))
-    new_row = {}
+distinct_df = (
+    df.groupby("Nickname", as_index=False)
+    .agg({
+        col: "first" if col not in ["Server name", "Device"] else lambda x: ", ".join(x.dropna().unique())
+        for col in df.columns
+    })
+)
 
-    # Owner and Nickname
-    new_row["Owner"] = (row_dict.get("Owner") or "").strip() or "Unassigned"
-    new_row["Nickname"] = (row_dict.get("Nickname") or "").strip()
+with pd.ExcelWriter(output_path, engine="openpyxl", mode="a", if_sheet_exists="replace") as writer:
+    distinct_df.to_excel(writer, sheet_name="Distinct", index=False)
 
-    # Environment
-    new_row["Environment"] = (row_dict.get("01 Environment") or "").strip()
-
-    # Internal/External
-    folder_value = (row_dict.get("Folder") or "").lower()
-    new_row["Internal/External"] = "External" if "external" in folder_value else "Internal"
-
-    # Valid To
-    valid_to = row_dict.get("Valid To")
-    if isinstance(valid_to, datetime):
-        new_row["Valid To"] = valid_to.strftime("%Y-%m-%d")
-    else:
-        new_row["Valid To"] = (valid_to or "").strip()
-
-    # Signing Type
-    new_row["Signing Type"] = "OTHER"
-    for keyword in signing_keywords:
-        if keyword.lower() in folder_value:
-            new_row["Signing Type"] = keyword
-            break
-
-    # Type
-    install_type = (row_dict.get("Installation Type") or "").upper()
-    new_row["Type"] = "OTHER"
-    for keyword in type_keywords:
-        if keyword in install_type:
-            new_row["Type"] = keyword
-            break
-
-    if new_row["Type"] == "OTHER" and "-" in install_type:
-        new_row["Type"] = install_type.split("-")[0]
-
-    # Server Name
-    device_value = (row_dict.get("Device") or "").strip()
-    new_row["Server name"] = device_value.split("(")[0].strip()
-
-    # Domain
-    common_name = (row_dict.get("Common Name") or "").lower()
-    new_row["Domain"] = "MC Domain" if "mastercard" in common_name else "NON MC Domain"
-
-    # Stage
-    status_value = (row_dict.get("Status") or "").strip().lower()
-    if status_value == "completed":
-        new_row["Stage"] = "Cert Secured"
-    elif status_value == "none":
-        new_row["Stage"] = "Phased Out"
-    else:
-        new_row["Stage"] = ""
-
-    # Extract MC Prod ID, WO number, CRQ number from comments
-    comments = (row_dict.get("Comments") or "").strip()
-    new_row["MC Prod ID"] = ""
-    if "mcprod" in comments.lower():
-        for word in comments.split():
-            if word.lower().startswith("mcprod") and len(word) >= 7:
-                new_row["MC Prod ID"] = word
-                break
-
-    new_row["WO number"] = ""
-    if "WO" in comments:
-        for word in comments.split():
-            if word.startswith("WO") and len(word) == 15:
-                new_row["WO number"] = word
-                break
-
-    new_row["CRQ number"] = ""
-    if "CRQ" in comments:
-        for word in comments.split():
-            if word.startswith("CRQ") and len(word) == 15:
-                new_row["CRQ number"] = word
-                break
-
-    new_row["Comments"] = comments
-    new_row["Serial number"] = (row_dict.get("Serial Number") or "").strip()
-    new_row["New Serial number"] = ""
-
-    # Current Status
-    new_row["CURRENT STATUS"] = "Expiring"
-    if status_value == "completed":
-        new_row["CURRENT STATUS"] = "Renewed"
-    elif status_value == "none":
-        new_row["CURRENT STATUS"] = "Retired"
-
-    # Additional fields
-    for col in ["Folder", "Common Name", "Key Size", "Issuer", "Program Name", "Contact",
-                "Installations", "Installation Type", "Device"]:
-        new_row[col] = (row_dict.get(col) or "").strip()
-
-    # Automation handling for F5 and MC Domain
-    if new_row["Type"] == "F5" and new_row["Domain"] == "MC Domain":
-        new_row["Stage"] = "AUTOMATION"
-        new_row["CURRENT STATUS"] = "AUTOMATED"
-
-    data.append(new_row)
-
-# Write output
-output_wb = Workbook()
-output_sheet = output_wb.active
-output_sheet.append(columns_order)
-
-for row in data:
-    output_sheet.append([row.get(col, "") for col in columns_order])
-
-output_wb.save(output_file)
-
-print("XLSX processing complete. File saved as:", output_file)
+print("Distinct sheet added to OUTPUTCHECK.xlsx!")
